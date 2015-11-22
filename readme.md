@@ -1,9 +1,8 @@
 GOALS:
 
-* Creates a fully sandboxes, javascript execution environment
-* Full Access to the internal function scopes
-* Encoding of the state of the sandbox
-* Serialization and Deserialization of the execution environment
+* To create a fully sandboxed and secure, javascript execution environment
+* Full access to the internal function scopes
+* Serialization and Deserialization of the sandbox's state
 * Access to evaluation and debugging primitives, such as step, step in, step out, etc.
 * Atomic transactions, commit/rollback
 * Async Promise based Remote/Foreign objects (Network/Persistent/IPC)
