@@ -1,0 +1,28 @@
+html, body {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    font-size: 15px;
+}
+
+.message {
+    color: #000000 !important;
+    font-weight: normal !important;
+}
+
+.error {
+    color: #FF0000 !important;
+    font-weight: normal;
+}
+
+.compiled {
+    font-weight: normal;
+    font-style: italic;
+}
+
+.result {
+    font-weight: normal;
+    font-style: italic;
+}

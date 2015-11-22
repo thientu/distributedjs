@@ -1,0 +1,51 @@
+{
+  "name": "distributedjs",
+  "version": "0.0.1",
+  "description": "Distributed Javascrit interpreter and run time",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mindonaut/distributedjs.git"
+  },
+  "author": "Jorge Lopez <jorge@mindonaut.com> (distributedjs.io)",
+  "bin": {
+    "DistributedJS": "cli.js"
+  },
+  "engines": {
+    "node": ">=4.0.0"
+  },
+  "scripts": {
+    "test": "xo && mocha"
+  },
+  "files": [
+    "index.js",
+    "cli.js"
+  ],
+  "keywords": [
+    "cli-app",
+    "cli"
+  ],
+  "dependencies": {
+    "body-parser": "^1.14.0",
+    "express": "^4.13.3",
+    "meow": "^3.3.0"
+  },
+  "devDependencies": {
+    "mocha": "^2.2.5",
+    "xo": "^0.7.1"
+  },
+  "xo": {
+    "envs": [
+      "node",
+      "mocha"
+    ]
+  },
+  "bugs": {
+    "url": "https://github.com/mindonaut/distributedjs/issues"
+  },
+  "homepage": "https://github.com/mindonaut/distributedjs#readme",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  }
+}
