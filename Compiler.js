@@ -1,9 +1,7 @@
-var esprima = require("esprima");
 var escope = require("escope");
 var recast = require("recast");
 var types = recast.types;
 var builders = recast.types.builders;
-var escodegen = require("escodegen");
 
 /**
  * Compiler scope/stack instrumentation constructor

@@ -7,7 +7,7 @@
     "type": "git",
     "url": "git+https://github.com/mindonaut/distributedjs.git"
   },
-  "author": "Jorge Lopez <jorge@mindonaut.com> (distributedjs.io)",
+  "author": "Jorge Lopez <jorge@distributedjs.io> (distributedjs.io)",
   "bin": {
     "DistributedJS": "cli.js"
   },
@@ -17,18 +17,24 @@
   "scripts": {
     "test": "xo && mocha"
   },
-  "files": [
-    "index.js",
-    "cli.js"
-  ],
   "keywords": [
-    "cli-app",
-    "cli"
+    "distributed",
+    "sandbox",
+    "remote objects",
+    "transactions",
+    "atomic",
+    "scope",
+    "vm"
   ],
   "dependencies": {
     "body-parser": "^1.14.0",
+    "browserify-middleware": "^7.0.0",
+    "console-highlight": "^0.1.0",
+    "escope": "^3.3.0",
     "express": "^4.13.3",
-    "meow": "^3.3.0"
+    "harmony-reflect": "^1.4.2",
+    "jsDump": "^1.1.0",
+    "recast": "^0.10.39"
   },
   "devDependencies": {
     "mocha": "^2.2.5",
