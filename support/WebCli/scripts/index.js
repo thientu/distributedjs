@@ -3,7 +3,7 @@
  */
 
 var CodeMirrorREPL = require("./codemirror-repl");
-var jsdump = require("jsdump");
+var jsdump = require("jsDump");
 
 function isCode(code) {
   try {
