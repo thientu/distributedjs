@@ -1,9 +1,8 @@
+"strict mode";
 var PromiseInterceptor = require('./PromiseInterceptor');
 var recast = require("recast");
 var types = recast.types;
 var builders = recast.types.builders;
-
-"strict mode";
 
 /**
  * Interpreter constructor
@@ -23,16 +22,25 @@ function Interpreter(vm) {
  * @param ast
  * @returns {*}
  */
+ 
 Interpreter.prototype.eval = function (ast) {
   var self = this;
-  return PromiseInterceptor.unWrap(function interpreterEvaluate() {
-    var evalPromise = new Promise(function (resolve, reject) {
-      self.evaluate(ast, resolve, reject);
-    })
-    return evalPromise;
-  }, function vmIntercept(interceptedPromise, executionStackPoints) {
-     // continue custom evaluation
+  var promiseToEvaluate = new Promise(function(resolve, reject){
+        self.evaluate(ast, resolve, reject);
   });
+  return promiseToEvaluate;
+};
+
+
+Interpreter.prototype.evaluateFrom = function (executionStackPoints) {
+  var self = this;
+  
+};
+
+Interpreter.prototype.getContinuation = function (executionStackPoints) {
+  var continuation;
+  
+  return continuation;
 };
 
 /**
@@ -43,11 +51,12 @@ Interpreter.prototype.eval = function (ast) {
  */
 Interpreter.prototype.evaluate = function (node, continuation, errorContinuation) {
   // If node is null, simply run the continuation (used to simplify code in some cases)
+  // var originalLoc = node.original.loc
+  // var sloc = this.vm.compiler.smc.generatedPositionFor({line:originalLoc.start.line,column:originalLoc.start.column,source:'map.json'});
+  // var eloc = this.vm.compiler.smc.generatedPositionFor({line:originalLoc.end.line,column:originalLoc.end.column,source:'map.json'});
+  
   if ( !node ) {
     continuation(); // If the passed node is empty, just keep going;
-  }
-  else if ( Array.isArray(node) ) { // If node, is really an array (of nodes)..
-    this.evaluateArray(node, continuation, errorContinuation);
   }
   else if ( node instanceof Object && typeof node.type !== "undefined" ) {
     if ( this.intercept(node, continuation, errorContinuation) ) {
@@ -56,6 +65,7 @@ Interpreter.prototype.evaluate = function (node, continuation, errorContinuation
 
     switch ( node.type ) {
       case "EmptyStatement":
+        continuation();
         break;
       case "Program":
         this.Program(node, continuation, errorContinuation);
@@ -75,6 +85,9 @@ Interpreter.prototype.evaluate = function (node, continuation, errorContinuation
         break;
       case "ExpressionStatement":
         this.evaluate(node.expression, continuation, errorContinuation);
+        break;
+      case "SequenceExpression":
+        this.SequenceExpression(node, continuation, errorContinuation);
         break;
       case "CallExpression":
         this.CallExpression(node, continuation, errorContinuation);
@@ -109,7 +122,7 @@ Interpreter.prototype.evaluate = function (node, continuation, errorContinuation
         throw new Error("Instrumented Code should not attempt to do try/catch directly");
         break;
       case "LogicalExpression":
-        this.ReturnStatement(node, continuation, errorContinuation);
+        this.LogicalExpression(node, continuation, errorContinuation);
         break;
       case "BinaryExpression":
         this.BinaryExpression(node, continuation, errorContinuation);
@@ -177,9 +190,9 @@ Interpreter.prototype.evaluateArray = function (nodes, continuation, errorContin
     }
     // If there are no more nodes to process, then we may proceed with the continuation passing the results
     else {
-      continuation(results);
+      continuation.call(self, results);
     }
-  })(); // call with the nodes array
+  }).call(this); // call with the nodes array
 }
 
 /**
@@ -202,6 +215,7 @@ Interpreter.prototype.Program = function (node, continuation, errorContinuation)
 
   }, errorContinuation);
 }
+
 
 /**
  *
@@ -229,6 +243,18 @@ Interpreter.prototype.BlockStatement = function (node, continuation, errorContin
 };
 
 /**
+ * 
+ * 
+ */
+
+Interpreter.prototype.SequenceExpression = function (node, continuation, errorContinuation) {
+  this.evaluateArray(node.expressions, function (results) { // Body is an array of nodes, so
+    // passing the value of the last statement to the continuation, since this is the natural behaviour of eval
+    continuation(results[results.length - 1]);
+  }, errorContinuation);
+}
+
+/**
  *
  * @param node
  * @param continuation
@@ -248,7 +274,7 @@ Interpreter.prototype.FunctionExpression = function (node, continuation, errorCo
 
   if ( node.id && !this.passive ) { // If it is a named function
     this.setValue(node.id.name, functionObject);
-    if ( !scope.parent && !this.passive ) { // if we are in the global scope and it is named, then add it there
+    if ( !this.scope.parent && !this.passive ) { // if we are in the global scope and it is named, then add it there
       this.scope.variables[node.id.name] = functionObject;
     }
   }
@@ -284,30 +310,46 @@ Interpreter.prototype.VariableDeclarator = function (node, continuation, errorCo
  */
 Interpreter.prototype.CallExpression = function (node, continuation, errorContinuation) {
   var self = this;
-  this.evaluate(node.callee, function (callee, _this) {
+  if ( node.callee.type === "MemberExpression" ) {
+    // Processing the arguments first
     self.evaluateArray(node.arguments, function (_arguments) {
-      // If the callee is undefined or is not a function, then launch error
-      if ( node.callee.type === "MemberExpression" && typeof callee === "undefined" || typeof callee !== "function" ) {
+    // Retrieving the callee    
+      self.evaluate(node.callee, function (callee, thisObj, memberMethodName) {
+        if ( typeof callee === "undefined" || typeof callee !== "function"  ) {
+          errorContinuation("Error", new TypeError(typeof callee + " is not a function"));
+        } else {
+            if (callee === eval ) {
+              continuation(self.scope.eval.apply(self.scope, _arguments));
+            }
+            else {
+              self.vm.tryCatch(function () {
+                "use strict"; // Making sure we do not leak the global object if "_this" is null
+                continuation(callee.apply(thisObj, _arguments));
+              }, errorContinuation);
+            } 
+        }
+      });
+     });
+  }
+  else {
+    this.evaluate(node.callee, function (callee) {
+      if ( typeof callee === "undefined" || typeof callee !== "function"  ) {
         errorContinuation("Error", new TypeError(typeof callee + " is not a function"));
-      }
-      else {
-        var thisObj = (node.callee.type === "MemberExpression") ? _this : null;
-        // executing function
-        if ( !self.passive ) {
-          if ( callee !== eval ) {
-            // use vm to catch intercept errors
-            self.vm.tryCatch(function () {
-              "use strict"; // Making sure we do not leak the global object if "_this" is null
-              continuation(callee.apply(thisObj, _arguments));
-            }, errorContinuation);
-          }
-          else { // Treat eval specially
+      } else {
+        self.evaluateArray(node.arguments, function (_arguments) {
+          if (callee === eval ) {
             continuation(self.scope.eval.apply(self.scope, _arguments));
           }
-        }
+          else {
+            self.vm.tryCatch(function () {
+              "use strict"; // Making sure we do not leak the global object if "_this" is null
+              continuation(callee.apply(null, _arguments));
+            }, errorContinuation);
+          }
+        });
       }
     });
-  });
+  }
 };
 
 /**
@@ -324,12 +366,13 @@ Interpreter.prototype.NewExpression = function (node, continuation, errorContinu
       if ( typeof Constructor !== "function" ) {             // if the callee is not a function
         errorContinuation("Error", new TypeError(typeof Constructor + " is not a function"));
       }
-      else {
-        self.vm.tryCatch(function () {    // use the vm try catch to catch interceptors
+      else {                  
+        self.vm.tryCatch(function () {    
           var BoundConstructor = Function.prototype.bind.apply(Constructor, [void 0].concat(_arguments));  // Create function, bound to the arguments retrieved, and then using new on it.
-          continuation(new BoundConstructor);
+          var newObject = new BoundConstructor;
+          continuation(newObject);
         }, function (error) {
-          errorContinuation("Error", error)
+          errorContinuation("Error", error);
         });
       }
     });
@@ -355,8 +398,8 @@ Interpreter.prototype.ConditionalExpression = function (node, continuation, erro
       continuation();
     }
   }, errorContinuation);
-
 };
+
 /**
  *
  * @param node
@@ -378,13 +421,13 @@ Interpreter.prototype.LoopExpression = function (node, continuation, errorContin
   else { // Else, we start evaluating the body first (do while), then do a normal loop continuation
     self.evaluate(node.body, bodyContinuation, bodyErrorContinuation);
   }
-
+  var lastResult;
   /**
    *
    * @param result
    */
-  function bodyContinuation(result) { // Body continuation, stores the result, and evaluates the update when present, then continue looping
-    bodyResults.push(result); // keeping track of the evaluation results, for continuations that need them (i.e. Program/eval)
+  function bodyContinuation(results) { // Body continuation, stores the result, and evaluates the update when present, then continue looping
+    lastResult = (results[results.length-1]); // keeping track of the evaluation results, for continuations that need them (i.e. Program/eval)
     // if there is an update, run it.
     // TODO: Ask/find why it is run before looping, and not after (perhaps it has run before once?)
     if ( node.update ) {
@@ -402,11 +445,11 @@ Interpreter.prototype.LoopExpression = function (node, continuation, errorContin
   function updateAndContinue(continuation) {
     if ( node.update ) {
       self.evaluate(node.update, function () {
-        continuation.apply(null, bodyResults.reverse());
+        continuation.apply(null, lastResult);
       }, errorContinuation);
     }
     else {
-      continuation.apply(null, bodyResults.reverse());
+      continuation.apply(null, lastResult);
     }
   }
 
@@ -420,7 +463,7 @@ Interpreter.prototype.LoopExpression = function (node, continuation, errorContin
     switch ( errorType ) {
       case "BreakStatement":
         if ( typeof value === "undefined" ) {
-          continuation.apply(null, extra.length ? extra : [bodyResults.pop()]);
+          continuation.apply(null, extra.length ? extra : lastResult);
         }
         else {
           errorContinuation(errorType, value, loopContinuation);
@@ -454,7 +497,7 @@ Interpreter.prototype.LoopExpression = function (node, continuation, errorContin
         }
         else { // if the test does not pass, then it is time to end the loop, so call the parent continuation
           // with all the results;
-          continuation(bodyResults.reverse());
+          continuation(lastResult);
         }
       }, errorContinuation);
     }
@@ -626,7 +669,15 @@ Interpreter.prototype.LogicalExpression = function (node, continuation, errorCon
       continuation(left);
     }
     else {
-      self.evaluate(node.right, node, errorContinuation);
+      self.evaluate(node.right, function(right) {
+        if ( node.operator === "&&" ) {
+          continuation(left && right);
+        } else if ( node.operator === "||" ) {
+          continuation(left || right)
+        } else {
+          errorContinuation(new SyntaxError("Incorrect logical operator"));
+        }
+      }, errorContinuation);
     }
   }, errorContinuation);
 };
@@ -709,7 +760,7 @@ Interpreter.prototype.BinaryExpression = function (node, continuation, errorCont
         default:
           errorContinuation("Error", new Error(node.type + " not implemented " + node.operator));
       }
-      continuation(value, left, right);
+      continuation(value);
     }, errorContinuation);
   }, errorContinuation);
 };
@@ -726,7 +777,7 @@ Interpreter.prototype.AssignmentExpression = function (node, continuation, error
   var self = this;
   this.evaluate(node.right, function (right) {
     self.evaluate(node.left, function (left) {
-      switch ( operator ) {
+      switch ( node.operator ) {
         case "=":
           left = right;
           break;
@@ -806,7 +857,7 @@ Interpreter.prototype.UpdateExpression = function (node, continuation, errorCont
 Interpreter.prototype.UnaryExpression = function (node, continuation, errorContinuation) {
   if ( node.operator === "delete" ) {
     if ( node.argument.type === "MemberExpression" ) {
-      this.evaluate(node.argument, function (object, propertyName) {
+      this.evaluate(node.argument, function (value, object, propertyName) {
         continuation(delete object[propertyName]);
       }, errorContinuation)
     }
@@ -850,7 +901,7 @@ Interpreter.prototype.UnaryExpression = function (node, continuation, errorConti
 Interpreter.prototype.Identifier = function (node, continuation, errorContinuation) {
   if ( !this.scope.has(node.name) ) {
     var value = this.scope.get(node.name);
-    continuation(value);
+    this.resolveValue(value, continuation, errorContinuation); // Since the property might be a proxy promise, pass on the resolveValue method
   }
   else {
     errorContinuation("ReferenceError", new ReferenceError("Requested variable not found in current scope!"));
@@ -865,14 +916,17 @@ Interpreter.prototype.Identifier = function (node, continuation, errorContinuati
  * @constructor
  */
 Interpreter.prototype.MemberExpression = function (node, continuation, errorContinuation) {
+  var self = this;
   this.evaluate(node.object, function (object) {
     var propertyNode = node.property;
     if ( propertyNode.type === "Identifier" && !node.computed ) {
-      continuation(object[propertyNode.name]);
+      self.resolveValue(object[propertyNode.name], function(value){
+        continuation(value, object, propertyNode.name);
+      }, errorContinuation); // Since the property might be a proxy promise, pass on the resolveValue method
     }
     else {
-      this.evaluate(propertyNode, function (propertyName) {
-        continuation(object[propertyName]);
+      self.evaluate(propertyNode, function (propertyName) {
+        continuation(object[propertyName], object, propertyName);
       }, errorContinuation);
     }
   }, errorContinuation);
@@ -908,30 +962,41 @@ Interpreter.prototype.Literal = function (node, continuation, errorContinuation)
  * @constructor
  */
 Interpreter.prototype.ObjectExpression = function (node, continuation, errorContinuation) {
-  this.evaluate(node.properties, function (properties) {
-    var objectProperties = Object.create(null);
-
-    for ( var i = 0; i < properties.length; i++ ) {
-      var key  = properties[i].key,
-          kind = node.properties[i].kind;
-      if ( ["get", "set"].indexOf(kind) >= 0 ) {
-        objectProperties[key] = objectProperties[key] || {};
-        // defaults
-        objectProperties[key].enumerable = true;
-        objectProperties[key].configurable = true;
-        objectProperties[key][kind] = properties[i].value;
-      }
-      else {
-        objectProperties[properties[i].key] = {
-          value       : properties[i].value,
-          configurable: true,
-          writable    : true,
-          enumerable  : true
-        };
-      }
+  var i = 0;
+  var self = this;
+  var objectProperties = Object.create(null);
+  (function evaluateNextProperty() {
+    // if there are nodes to process
+    if ( i < node.properties.length ) {
+      var property = node.properties[i++];// evaluate first node while removing it from the remaining nodes array
+      var key  = property.key.name, kind = property.kind;
+      self.evaluate(property.value, function (value) {
+        if ( ["get", "set"].indexOf(kind) >= 0 ) {
+          objectProperties[key] = objectProperties[key] || {};
+          // defaults
+          objectProperties[key].enumerable = true;
+          objectProperties[key].configurable = true;
+          objectProperties[key][kind] = value;
+        }
+        else {
+          objectProperties[key] = {
+            value       : value,
+            configurable: true,
+            writable    : true,
+            enumerable  : true
+          };
+        }
+        // evaluate next node, passing the remaining nodes
+        evaluateNextProperty();
+      },
+      errorContinuation);
     }
-    continuation(Object.create(Object.prototype, objectProperties));
-  }, errorContinuation);
+    // If there are no more nodes to process, then we may proceed with the continuation passing the results
+    else {
+      var object = Object.create(Object.prototype, objectProperties);
+      continuation.call(self, object);
+    }
+  }).call(this); // call with the nodes array
 };
 
 /**
@@ -964,7 +1029,8 @@ Interpreter.prototype.setValue = function (node, value, continuation, errorConti
     continuation(value);
   }
   else if ( node.type === "MemberExpression" ) {
-    this.evaluate(node, function (object, propertyName) {
+    var propertyName = node.property.name;
+    this.evaluate(node.object, function (object) {
       if ( !this.passive ) {
         object[propertyName] = value;
       }
@@ -1043,5 +1109,16 @@ Interpreter.prototype.shouldStop = function (node) {
 Interpreter.prototype.jumpTo = function (ast, executionStackPoints) {
 
 };
+
+Interpreter.prototype.resolveValue = function(value, continuation, errorContinuation) {
+  if (typeof value === "object" && PromiseInterceptor.isProxyPromise(value)) { // If the value being referenced is a promise, then process differently
+      var promise = PromiseInterceptor.getPromise(value);
+      promise.then(function(value){
+        continuation(value);
+      }, errorContinuation.bind(this)); // when the promise is fullfilled
+    } else {
+      continuation.call(this, value);
+    }
+}
 
 module.exports = Interpreter;

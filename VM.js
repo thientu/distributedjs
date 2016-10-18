@@ -11,23 +11,30 @@ var PromiseInterceptor = require('./PromiseInterceptor');
  * @param name
  * @constructor
  */
-function VM(global, name) {
+function VM(global, name, initScript) {
   this.setGlobal(global);
   this.functionData = new WeakMap();
   this.stack = [];
   this.name = name || "VM" + Math.round(Math.random() * 100000);
+  this.compiler = new Compiler();
+  this.interpreter = new Interpreter(this);
   // Creating default execution context, as a new closure (in global context), and access to evaluate within it;
-  this.sandbox = new Function("global", "capture", "link", "close", "undefined",
+  var sandbox = new Function("global", "capture", "link", "close", "undefined",
+                              "//# sourceURL=" + this.name +
+                              "\n'use strict';\n" +
                               "return function globalEval() {         " +
                               "   return eval(arguments[0]);" +
                               "}");
   // Retrieving evaluation function within the sandbox environment
-  var evaluate = this.sandbox.call(this.global, this.global, capture.bind(this), link.bind(this), close.bind(this));
+  var evaluate = sandbox.call(this.global, this.global, capture.bind(this), link.bind(this), close.bind(this));
   // Creating new scope for the sandbox environment, with the right variables
   this.scope = new Scope(this.sandbox, evaluate, this.global, this.global);
-  this.compiler = new Compiler();
-  this.interpreter = new Interpreter(this);
+
+
 }
+
+
+
 /**
  * Sets global object, and populates with required objects
  * @param global
@@ -99,47 +106,49 @@ VM.prototype.getAstFunction = function (ast) {
  */
 VM.prototype.eval = function vmEval(code) {
   var self = this;
-  return PromiseInterceptor.unWrap(function interceptorEvaluate() {
-    var result, error;
-    // pushing the sandbox as the first caller on the stack (important for link);
-    self.stack.push({ caller: self.scope.evaluate, scope: self.scope, linkCounter: 0 });
-    try {
-      var compiledCode = self.compiler.compile(code);
-      self.code = compiledCode;
-      result = self.scope.eval("//# sourceURL=" + self.name + "\n'use strict';\n" + compiledCode);
-    } catch ( err ) {
-      error = err;
-    }
-    self.stack.pop();
-    if ( error ) {
-      throw(error);
-    }
-    else {
-      return result;
-    }
-  }, function vmIntercept(interceptedPromise, executionStackPoints) {
-    // Stopping execution
-    var promiseToInterpret = self.interpret(interceptedPromise, executionStackPoints);
-    // returning the promise to finish execution
-    return promiseToInterpret;
-  });
-
+  var compiledCode = this.compiler.compile(code);
+  this.code = compiledCode;
+  this.evaluate(function(){
+    retun self.scope.eval(code);
+  })
+  return promiseToEvaluate;
 };
 
-VM.prototype.interpret = function (interceptedPromise, executionStackPoints) {
+
+VM.prototype.evaluate = function (evaluate) {
+  var self = this;
+  var compiledCode = this.compiler.compile(code);
+  this.code = compiledCode;
+  var promiseToEvaluate = new Promise(function(resolve, reject) {
+    PromiseInterceptor.capture(
+      function() {
+        var result = self.scope.eval(code);
+        resolve(result); // If we got to this point without problems, then we can simply resolve the promise immediatelly, passing the result
+      },
+      function intercept(interceptedPromise, executionStackPoints) { // This function allows the VM to intercept a proxy wrapped promise.
+        console.log("Intercepted!");
+        // If the "intercept" callback, gets executed, then it means there was a proxy promise that needs to be resolved, and thus, we need to go to interpreted mode.
+        self.interpret(interceptedPromise, executionStackPoints, resolve, reject);
+      }
+    );
+  });
+  return promiseToEvaluate;
+}
+
+
+/**
+ * 
+ * 
+ */
+VM.prototype.interpret = function (interceptedPromise, executionStackPoints, resolve, reject) {
   var self = this;
   console.log("This is a special promise error", executionStackPoints, this.stack);
-  var promiseToInterpret = new Promise(function (succeed, reject) {
-    // Some how continue evaluation
-    promise.then(function (result) {
-      self.interpreter.continue(executionStackPoints);
-
-      succeed("We are evaluating in interpreter mode! " + result);
-    }).catch(function (error) {
-      reject(error);
-    });
+  interceptedPromise.then(function (result) { // As soon as we have the result of the intercepted promise
+    console.log("We are evaluating in interpreter mode! " + result);
+    self.interpreter.continue(executionStackPoints, result, resolve); // continue evaluation
+  }).catch(function (error) {
+    reject(error); // If there is an error in the evaluation, then reject the promise with the error
   });
-  return promiseToInterpret;
 };
 
 VM.prototype.resume = function () {
@@ -199,6 +208,8 @@ VM.prototype.tryCatch = function (tryCallback, catchCallback) {
   }
 };
 
+
+
 /**
  * Private Capture function to be made available within the sandbox environment
  * @param parentFunction
@@ -228,8 +239,14 @@ function link(closure) {
   // storing ast node to closure association for later serialization
   var node = scopeData.children[stackFrame.linkCounter++].node;
   this.functionData.set(node, closure);
+  // 
+  
   // Linking and returning function
   return scope.link(closure);
+}
+
+function open(parentFunction, scope) {
+  this.pushCaller(parentFunction, scope);
 }
 
 /**

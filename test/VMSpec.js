@@ -2,8 +2,10 @@ var sinon = require('sinon');
 var chai = require('chai');
 var expect = chai.expect;
 var VM = require('../VM');
+var PromiseInterceptor = require('../PromiseInterceptor');
 
-describe("VM tests", function () {
+
+xdescribe("VM tests", function () {
   describe("Should create a basic, sandboxed environment", function () {
 
     it('All global variable accesses, should access the values on the global object provided', function () {
@@ -49,10 +51,29 @@ describe("VM tests", function () {
       scope.setEnvironment({x:25});
       expect(25).to.equal(closure());
     });
-
-
+    
+    
   });
 
 });
+
+
+describe("dev describe for VM", function(){
+  it('should be able to handle proxy promises - 2', function (done) {
+      var global = {a:[1,2,3,4],p:new PromiseInterceptor(function(accept,reject){
+        process.nextTick(function(){
+          accept(3);
+        });
+      })};
+      var vm = new VM(global);
+      vm.eval("a[p]");
+      var ast = vm.compiler.ast;
+      var valuePromise = vm.interpreter.eval(ast.program);
+      valuePromise.then(function(value){
+        expect(value).to.equal(4);
+        done();
+      });
+    });
+})
 
 

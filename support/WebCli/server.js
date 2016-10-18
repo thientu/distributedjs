@@ -6,6 +6,7 @@ var app = express();
 var bodyParser = require('body-parser');
 var VM = require("../../VM");
 var Compiler = require("../../Compiler");
+var isPromise = require('is-promise');
 
 app.use('/scripts', browserify(__dirname + '/scripts'));
 app.use(express.static('./'));
@@ -40,6 +41,7 @@ app.post('/', function (req, res) {
   }
 
   function sendResult(result) {
+    console.log(compiled);
     res.send(JSON.stringify({
       compiled: compiled,
       result  : result,
@@ -56,7 +58,7 @@ app.post('/', function (req, res) {
   }
 
   // If it is a promise, wait for the result/error
-  if ( typeof result !== "undefined" && result instanceof Object && result.then && result.then instanceof Function ) {
+  if ( isPromise(result) ) {
     result.then(sendResult, sendError);
   }
   // Otherwise, send the result/error directly
@@ -74,6 +76,20 @@ var server = app.listen(process.env.PORT, function () {
   var host = server.address().address;
   var port = server.address().port;
 
-  console.log('Example app listening at http://%s:%s', host, port);
+  //console.log('Example app listening at http://%s:%s', host, port);
 });
 
+
+// Starting local Repl (for same object)
+var repl = require("repl");
+repl.start({
+	prompt: "distributedjs> ",
+	input: process.stdin,
+	output: process.stdout,
+	eval: function(cmd, context, filename, callback) {
+		 (vm.eval(cmd)).then(function(result){
+		   callback(null, result);
+		 });
+		 
+	}
+});

@@ -2,6 +2,8 @@ var escope = require("escope");
 var recast = require("recast");
 var types = recast.types;
 var builders = recast.types.builders;
+var SourceMapConsumer = require("source-map").SourceMapConsumer;
+
 
 /**
  * Compiler scope/stack instrumentation constructor
@@ -24,15 +26,46 @@ function Compiler(code) {
  */
 Compiler.prototype.compile = function (code) {
   this.code = code;
-  this.ast = recast.parse(code);
+  this.ast = recast.parse(code,{ sourceFileName: "source.js"});
+
   this.scopes = escope.analyze(this.ast).scopes;
   this.scope = this.scopes[0];
-  this.scope.data = { node: this.scope.block, children: [] };
+  this.scope.data = { node: this.scope.block, children: [] }; //TODO: mantain this data on a separate object (weakmap)
   // TODO EVENTUALLY: Support es6 lexical scoping;
   // Getting program body
   var body = this.ast.program.body;
   // Mapping global variable/function declarations to global object
   var globalScope = this.scopes[0];
+  
+  // Replacing global declarations (i.e. var a = 1, for global.a = 1)
+  this.replaceDeclarations(globalScope, body);
+
+  //TODO: Make sure we capture the arguments array
+  // Capturing the environment and call stack
+  this.captureCalls(globalScope);
+
+ 
+  // Breaking down object chains, to maintain all partial execution states of the function
+  //TODO: Break chain calls down to simpler chunks, to cache the return values. This allows to maintain the execution
+  //TODO: state within the closure, even after the execution has been interrupted by remote object access interception
+  //TODO:  i.e.:  return [1,2,3,remoteObj].pop().remoteProperty(localVar) -->
+  //TODO: _1 = [1,2,3,remoteObj]; _2 = _1.pop(); _3 = _2.remoteProperty(); return _3;               OR
+  //TODO: return _1 = [1,2,3,remoteObj], _2 = _1.pop(), _3 = _2.remoteProperty();
+  // Instrumenting try/catch/Finalize
+  //TODO: Replace try/catch with Try/Catch/Finalize(tryCallback, catchCallback, finalizeCallback), to let all other
+  //TODO: errors bubble, while still capturing the errors that are relevant to the VM/Interpreter
+  //TODO: while creating and formatting an error stack, that does not leak the parent program state.
+  //TODO: Any variables declared inside the try/catch/finalize, should be moved to be declared outside the callbacks
+
+  // Returning the resulting code
+  var print = recast.print(this.ast, {sourceMapName: "map.json" });
+  this.output = print.code;
+  this.smc = new SourceMapConsumer(print.map);
+  
+  return this.output;
+};
+
+Compiler.prototype.replaceDeclarations = function (globalScope, body) {
   var expressions = [];
   var functionDeclarations = [];
   // Going through each one of the variable declarations detected by the scope analysis on the global scope
@@ -84,31 +117,13 @@ Compiler.prototype.compile = function (code) {
       }
     }
   }
-
-  //TODO: Make sure we capture the arguments array
-  // Capturing the environment and call stack
-  this.captureCalls(globalScope);
-
-  // Add the expression statement at the beginning of the body;
+  
+   // Add the expression statement at the beginning of the body;
   if ( expressionStatement ) {
     body.unshift(expressionStatement);
   }
-
-  // Breaking down object chains, to maintain all partial execution states of the function
-  //TODO: Break chain calls down to simpler chunks, to cache the return values. This allows to maintain the execution
-  //TODO: state within the closure, even after the execution has been interrupted by remote object access interception
-  //TODO:  i.e.:  return [1,2,3,remoteObj].pop().remoteProperty(localVar) -->
-  //TODO: _1 = [1,2,3,remoteObj]; _2 = _1.pop(); _3 = _2.remoteProperty(); return _3;
-  // Instrumenting try/catch/Finalize
-  //TODO: Replace try/catch with Try/Catch/Finalize(tryCallback, catchCallback, finalizeCallback), to let all other
-  //TODO: errors bubble, while still capturing the errors that are relevant to the VM/Interpreter
-  //TODO: while creating and formatting an error stack, that does not leak the parent program state.
-  //TODO: Any variables declared inside the try/catch/finalize, should be moved to be declared outside the callbacks
-
-  // Returning the resulting code
-  this.output = recast.prettyPrint(this.ast).code;
-  return this.output;
-};
+  
+}
 
 /**
  * Capturing the function environment, for scopes that have closures (eval, variable/function declarations, and "this")
@@ -290,11 +305,13 @@ Compiler.prototype.wrapFunctionAst = function (ast, functionAst, type, wrappedFu
 Compiler.prototype.wrapAst = function (containerAst, ast, wrap, _path) {
   var path = _path ? _path : [];
   path.push(containerAst);
-
+  function isValidAstObject(key) {
+    return typeof containerAst[key] === "object" && key !== "original" && containerAst[key] !== null && key !== "loc" && key !== "errors" && key.indexOf("weakMap") < 0;
+  }
   var keys = Object.getOwnPropertyNames(containerAst);
   for ( var i = 0; i < keys.length; i++ ) {
     var key = keys[i];
-    if ( typeof containerAst[key] === "object" && containerAst[key] !== null && key !== "original" && key !== "loc" && key !== "errors" && key.indexOf("weakMap") < 0 ) {
+    if ( isValidAstObject(key) ) {
       if ( containerAst[key] === ast ) {
         containerAst[key] = wrap(path);
         return true;
@@ -303,7 +320,7 @@ Compiler.prototype.wrapAst = function (containerAst, ast, wrap, _path) {
   }
   for ( var i = 0; i < keys.length; i++ ) { // IF not found on the first go, iterate in the next level
     var key = keys[i];
-    if ( typeof containerAst[key] === "object" && containerAst[key] !== null && key !== "original" && key !== "loc" && key !== "errors" && key.indexOf("weakMap") < 0 ) {
+    if ( isValidAstObject(key) ) {
       if ( this.wrapAst(containerAst[key], ast, wrap, path) ) {
         return true
       }
@@ -319,19 +336,22 @@ Compiler.prototype.wrapAst = function (containerAst, ast, wrap, _path) {
 Compiler.prototype.replaceGlobals = function (scope) {
   // TODO: Use a robust node traversal library and transformation library to look at the code
   // Renaming global accesses to refer to the global object
+  var self = this;
   for ( var k = 0; k < scope.through.length; k++ ) {
     var through = scope.through[k];
     if ( !through.resolved ) { // If it has not been resolved, it is a global
       var identifier = through.identifier;
-      if ( identifier.type == "Identifier" && identifier.name !== "global" && identifier.name !== "undefined" && this.processedIdentifiers.indexOf(identifier) === -1 ) {   // If the identifiers is not "global" or "undefined", and it has not been processed before (within variable declarations)
+      if ( identifier.type == "Identifier" && this.processedIdentifiers.indexOf(identifier) === -1 && identifier.name !== "global" && identifier.name !== "undefined" ) {   // If the identifiers is not "global" or "undefined", and it has not been processed before (within variable declarations)
+        self.processedIdentifiers.push(identifier);
         this.wrapAst(scope.block, identifier, function (path) {
           var parentNode = path[path.length - 1];
-          if ( parentNode && parentNode.type !== "MemberExpression" ) { // If it is not already a member expression
-            return builders.memberExpression(builders.identifier("global"), identifier);
-          }
-          else {
-            return identifier;
-          }
+          return builders.memberExpression(builders.identifier("global"), identifier);
+          // if ( parentNode && parentNode.type !== "MemberExpression" ) { // If it is not already a member expression
+          //   return builders.memberExpression(builders.identifier("global"), identifier);
+          // }
+          // else {
+          //   return identifier;
+          // }
         });
         // prepending global (the easy way)
         //identifier.name = "global." + identifier.name;

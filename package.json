@@ -29,12 +29,14 @@
   "dependencies": {
     "body-parser": "^1.14.0",
     "browserify-middleware": "^7.0.0",
+    "chai": "^3.4.1",
     "console-highlight": "^0.1.0",
     "escope": "^3.3.0",
     "express": "^4.13.3",
     "harmony-reflect": "^1.4.2",
     "jsDump": "^1.1.0",
-    "recast": "^0.10.39"
+    "recast": "^0.10.39",
+    "sinon": "^1.17.2"
   },
   "devDependencies": {
     "mocha": "^2.2.5",

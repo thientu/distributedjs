@@ -32,15 +32,17 @@ describe("Compiler Environment setup", function () {
   it('It should rewrite global accesses to point to the global object', function () {
     // Object.create() -->  global.Object.create()
     var compiler = new Compiler();
+    var code2 = formatCode(compiler.compile("var x = y;"));
+    var content2 = formatCode("global.x = global.y");
+    expect(code2).to.contain(content2);
+    var compiler = new Compiler();
     var code = formatCode(compiler.compile("Object.create()"));
     var content = formatCode("global.Object.create()");
     expect(code).to.contain(content);
     var code1 = formatCode(compiler.compile("function hello(){ return Array.prototype = hello }"));
     var content1 = ("global.Array.prototype = global.hello");
     expect(code1).to.contain(content1);
-    var code2 = formatCode(compiler.compile("var x = y;"));
-    var content2 = formatCode("global.x = global.y");
-    expect(code2).to.contain(content2);
+   
   });
 
   it('It should capture an eval function for functions that create closures', function () {

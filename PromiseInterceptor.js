@@ -23,19 +23,21 @@ Error.stackTraceLimit = 100;
  */
 function getTrap(name) {
   return function proxyTrap(promise) {
-    console.log("Intercepted call to", name);
+    console.log("Intercepted call to", name, arguments[1]);
+    // Allowing to recognize the promise interceptor without triggering the intercept operation
+    if ( name === "get" && arguments[1] === "isPromiseInterceptor" ) {
+      return true;
+    }
     if ( PromiseInterceptor.intercept ) {
-      // Allowing to recognize the promise interceptor without triggering the intercept operation
-      if ( name === "get" && arguments[1] === "isPromiseInterceptor" ) {
-        return true;
-      }
-      // Making sure it only gets called once per interception (to allow the interpreter to intercept too)
-      PromiseInterceptor.intercept = null;
       // Capturing the error stack
       var error = {};
       Error.captureStackTrace(error, proxyTrap);
       var errorStack = (error).stack;
-      return PromiseInterceptor.intercept.call(PromiseInterceptor, promise, errorStack);
+      // returning the promise interceptor "intercept" call, passing the promise and the error stack as parameters
+      var value = PromiseInterceptor.intercept(promise, errorStack);
+      // Making sure it only gets called once per interception (to allow the interpreter to intercept too)
+      PromiseInterceptor.intercept = null;
+      return value;
     }
     else {
       return Reflect[name].apply(PromiseInterceptor, arguments);
@@ -48,16 +50,20 @@ function getTrap(name) {
  * @param promise
  * @returns {*|XMLList|XML|Namespace|Array|boolean}
  */
-function valueOfTrap(promise) {
+function valueOfTrap() {
+  var promise = PromiseInterceptor.unwrapProxyPromise(this);
   var error = {};
   Error.captureStackTrace(error, valueOfTrap);
   var errorStack = (error).stack;
   if ( PromiseInterceptor.intercept ) {
-    return PromiseInterceptor.intercept.call(PromiseInterceptor, promise, errorStack);
+   var value = PromiseInterceptor.intercept(promise, errorStack);
+    // Making sure it only gets called once per interception (to allow the interpreter to intercept too)
+    PromiseInterceptor.intercept = null;
+    return value;
   }
   else {
-    console.log("Intercepted call to", name);
-    return promise.__proto__.valueOf();
+    console.log("Intercepted call to Value of!!!");
+    //return promise.__proto__.valueOf.call(promise);
   }
 }
 
@@ -65,7 +71,7 @@ function valueOfTrap(promise) {
  * Building proxy handler, with all traps set to the same behaviour.
  * @type {{getOwnPropertyDescriptor: Function, getOwnPropertyNames: Function, getPrototypeOf: Function, defineProperty: Function, deleteProperty: Function, freeze: Function, seal: Function, preventExtensions: Function, isFrozen: Function, isSealed: Function, isExtensible: Function, has: Function, hasOwn: Function, get: Function, set: Function, enumerate: Function, keys: Function, apply: Function, construct: Function}}
  */
-var handler = {
+var proxyHandler = {
   getOwnPropertyDescriptor: getTrap("getOwnPropertyDescriptor"),
   getOwnPropertyNames     : getTrap("getOwnPropertyNames"),
   getPrototypeOf          : getTrap("getPrototypeOf"),
@@ -84,7 +90,8 @@ var handler = {
   enumerate               : getTrap("enumerate"),
   keys                    : getTrap("keys"),
   apply                   : getTrap("apply"),
-  construct               : getTrap("construct")
+  construct               : getTrap("construct"),
+  typeof                  : getTrap("typeof")
 };
 
 /**
@@ -93,18 +100,18 @@ var handler = {
  * @returns {*}
  * @constructor
  */
-function PromiseInterceptor(handler) {
-  var promise = new Promise(handler);
+function PromiseInterceptor(executor) {
+  var promise = new Promise(executor);
   // Capturing valueOf and toString, for non object promises
-  Object.defineProperties(promise, {
-    valueOf : {
-      value: valueOfTrap
-    },
-    toString: {
-      value: valueOfTrap
-    }
-  });
-  var proxy = Proxy(promise, handler);
+  // Object.defineProperties(promise, {
+  //   valueOf : {
+  //     value: valueOfTrap
+  //   },
+  //   toString: {
+  //     value: valueOfTrap
+  //   }
+  // });
+  var proxy = Proxy(promise, proxyHandler);
   // Storing proxy to promise for later retrieval
   promises.set(proxy, promise);
   return proxy;
@@ -131,6 +138,7 @@ PromiseInterceptor.hasPromise = function (proxy) {
     return false;
   }
 };
+
 /**
  *
  * @param obj
@@ -139,6 +147,16 @@ PromiseInterceptor.hasPromise = function (proxy) {
 PromiseInterceptor.isProxyPromise = function (obj) {
   return this.hasPromise(obj);
 };
+
+
+PromiseInterceptor.unwrapProxyPromise = function (obj) {
+  if (this.isProxyPromise(obj)) {
+    return this.getPromise(obj);
+  } else {
+    return obj;
+  }
+};
+
 /**
  * Returns an array, with the points in the call stack where the code stopped
  * @param errorStack
@@ -166,29 +184,28 @@ PromiseInterceptor.getExecutionStackPoints = function (errorStack) {
  * @param intercept
  * @returns {*}
  */
-PromiseInterceptor.unWrap = function (evaluate, intercept) {
+PromiseInterceptor.capture = function (evaluate, intercept) {
   var result;
-  this.intercept = function (promise, errorStack) {
+  PromiseInterceptor.intercept = function (promise, errorStack) {
     var stackPoints = PromiseInterceptor.getExecutionStackPoints(errorStack);
-    result = intercept.call(this, promise, stackPoints);
+    intercept(promise, stackPoints);
     throw(PromiseInterceptor); // interrupting after evaluation
   };
   try {
     result = evaluate();
   } catch ( err ) {
-    // if the error is the one we threw, then stop here, otherwise, pass it on
+    // if ( err instanceof TypeError && err.message.indexOf("not a function")  ) {
+    //   var stackPoints = PromiseInterceptor.getExecutionStackPoints(err.stack);
+    //   var promiseName = PromiseInterceptor.getPromiseName(err.message);
+    //   var promise = this.scope.get(promiseName);
+    //   intercept(promise, stackPoints);
+    // }
+    // else 
     if ( err !== PromiseInterceptor ) {
+      // if the error is not an evaluation interception error, we throw it again,
+      // otherwise, we continue
       throw(err)
     }
-  }
-
-  // If result is a wrapped promise
-  if ( this.isProxyPromise(result) ) {
-    // Unwrap promise
-    return this.getPromise(result);
-  }
-  else {
-    return result;
   }
 };
 /**
