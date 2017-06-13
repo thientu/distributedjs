@@ -15,7 +15,9 @@
     "node": ">=4.0.0"
   },
   "scripts": {
-    "test": "xo && mocha"
+    "ci": "mocha && xo",
+    "test": "mocha",
+    "lint": "xo"
   },
   "keywords": [
     "distributed",
@@ -37,7 +39,9 @@
     "recast": "^0.10.39"
   },
   "devDependencies": {
+    "chai": "^4.0.2",
     "mocha": "^2.2.5",
+    "sinon": "^2.3.4",
     "xo": "^0.7.1"
   },
   "xo": {
